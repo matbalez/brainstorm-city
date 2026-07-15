@@ -205,13 +205,25 @@ function findCopyIssues(payload: IdeasResponse) {
 
   for (const idea of payload.ideas) {
     for (const field of textFields) {
-      if (!hasCleanEnding(idea[field])) {
+      if (!hasCleanField(field, idea[field])) {
         issues.push(`${idea.rank}.${field}`);
       }
     }
   }
 
   return issues;
+}
+
+function hasCleanField(field: (typeof textFields)[number], text: string) {
+  if (!hasCleanEnding(text)) {
+    return false;
+  }
+
+  if (field === "targetUser" && /^(It|This|That|The app)\b/.test(text)) {
+    return false;
+  }
+
+  return true;
 }
 
 function hasCleanEnding(text: string) {
@@ -282,6 +294,7 @@ function buildOpenAIRequest(input: GenerateRequest, virality: number, isRetry = 
           `Preferred platform: ${platform}`,
           `Target audience: ${audience}`,
           `Virality target: ${virality}/100 (${viralityLabel(virality)}).`,
+          "Field meanings: n=app name, t=tagline, p=platform, u=target audience noun phrase, c=concept sentence, h=share hook, s=MVP scope, d=difficulty.",
           "Keep c, h, and s to one sentence each. Avoid generic AI wrappers.",
           "Use plain ASCII punctuation. Do not use markdown.",
           retryInstruction
