@@ -52,6 +52,27 @@ interface OpenAIResponsePayload {
 }
 
 const IDEA_COUNT = 5;
+const textFields = ["name", "tagline", "targetUser", "concept", "viralHook", "buildScope"] as const;
+const danglingEndWords = new Set([
+  "a",
+  "an",
+  "and",
+  "as",
+  "at",
+  "by",
+  "for",
+  "from",
+  "in",
+  "into",
+  "of",
+  "on",
+  "or",
+  "the",
+  "to",
+  "via",
+  "with",
+  "without"
+]);
 const rootDir = process.cwd();
 const clientDir = resolve(rootDir, "dist", "client");
 const isProduction = process.env.NODE_ENV === "production";
@@ -115,32 +136,116 @@ async function handleGenerate(req: IncomingMessage, res: ServerResponse) {
 
   const body = await readJsonBody<GenerateRequest>(req);
   const virality = clamp(Number(body.virality ?? 55), 0, 100);
-  const payload = buildOpenAIRequest(body, virality);
   const startedAt = Date.now();
+  let attempts = 1;
 
+  try {
+    let parsed = await requestIdeas(apiKey, body, virality, false);
+    let issues = findCopyIssues(parsed);
+
+    if (issues.length > 0) {
+      attempts = 2;
+      parsed = await requestIdeas(apiKey, body, virality, true);
+      issues = findCopyIssues(parsed);
+    }
+
+    setGenerationTiming(res, Date.now() - startedAt, attempts);
+
+    if (issues.length > 0) {
+      sendJson(res, 502, {
+        message: "Brainstorm City generated malformed copy. Please try again."
+      });
+      return;
+    }
+
+    sendJson(res, 200, parsed);
+  } catch (caught) {
+    setGenerationTiming(res, Date.now() - startedAt, attempts);
+
+    if (caught instanceof OpenAIRequestError) {
+      sendJson(res, caught.status, { message: caught.message });
+      return;
+    }
+
+    throw caught;
+  }
+}
+
+async function requestIdeas(apiKey: string, input: GenerateRequest, virality: number, isRetry: boolean) {
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(buildOpenAIRequest(input, virality, isRetry))
   });
 
   const responseBody = (await response.json()) as OpenAIResponsePayload;
-  setGenerationTiming(res, Date.now() - startedAt);
 
   if (!response.ok) {
-    sendJson(res, response.status, {
-      message: responseBody.error?.message ?? "OpenAI could not generate ideas right now."
-    });
-    return;
+    throw new OpenAIRequestError(response.status, responseBody.error?.message ?? "OpenAI could not generate ideas right now.");
   }
 
   const text = extractOutputText(responseBody);
-  const parsed = normalizeIdeas(JSON.parse(text) as unknown);
+  return normalizeIdeas(JSON.parse(text) as unknown);
+}
 
-  sendJson(res, 200, parsed);
+class OpenAIRequestError extends Error {
+  constructor(
+    readonly status: number,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+function findCopyIssues(payload: IdeasResponse) {
+  const issues: string[] = [];
+
+  for (const idea of payload.ideas) {
+    for (const field of textFields) {
+      if (!hasCleanEnding(idea[field])) {
+        issues.push(`${idea.rank}.${field}`);
+      }
+    }
+  }
+
+  return issues;
+}
+
+function hasCleanEnding(text: string) {
+  if (!text) {
+    return false;
+  }
+
+  if (/[#\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF\uFFFD]/.test(text)) {
+    return false;
+  }
+
+  if (/,\d/.test(text) || /[,;:/\\&+\-([{]$/.test(text)) {
+    return false;
+  }
+
+  const trimmed = text.replace(/[.!?)]$/, "").trim();
+  const rawLastWord = trimmed.split(/\s+/).at(-1) ?? "";
+  const lastWord = rawLastWord.toLowerCase();
+
+  if (!lastWord || danglingEndWords.has(lastWord) || /^[a-z]{1,2}$/.test(rawLastWord)) {
+    return false;
+  }
+
+  return /[A-Za-z0-9.!?)]$/.test(text);
+}
+
+function normalizeText(value: unknown) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .replace(/[\u0000-\u001F\u007F]/g, " ")
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF\uFFFD]/g, "")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 async function createDevServer() {
@@ -152,11 +257,14 @@ async function createDevServer() {
   });
 }
 
-function buildOpenAIRequest(input: GenerateRequest, virality: number) {
+function buildOpenAIRequest(input: GenerateRequest, virality: number, isRetry = false) {
   const model = clean(process.env.OPENAI_MODEL) || "gpt-5.6-luna";
   const platform = clean(input.platform) || "any app platform";
   const direction = clean(input.direction) || "No specific theme. Find a sharp opportunity.";
   const audience = clean(input.targetAudience) || "A high-intent audience with a real recurring problem.";
+  const retryInstruction = isRetry
+    ? "Regenerate from scratch because the prior copy was malformed. Every string must end as a complete phrase."
+    : "Every string must be a complete phrase. Rewrite shorter instead of truncating.";
 
   return {
     model,
@@ -164,7 +272,7 @@ function buildOpenAIRequest(input: GenerateRequest, virality: number) {
       {
         role: "system",
         content:
-          "You generate concise app concepts for prototype builders. Favor specific user pain, feasible MVPs, and non-generic hooks. Return compact JSON only."
+          "You generate concise app concepts for prototype builders. Favor specific user pain, feasible MVPs, and non-generic hooks. Return compact JSON only. Never end a string with a comma, conjunction, preposition, stray #, hidden character, or clipped word."
       },
       {
         role: "user",
@@ -174,7 +282,9 @@ function buildOpenAIRequest(input: GenerateRequest, virality: number) {
           `Preferred platform: ${platform}`,
           `Target audience: ${audience}`,
           `Virality target: ${virality}/100 (${viralityLabel(virality)}).`,
-          "Keep c, h, and s to one sentence each. Avoid generic AI wrappers."
+          "Keep c, h, and s to one sentence each. Avoid generic AI wrappers.",
+          "Use plain ASCII punctuation. Do not use markdown.",
+          retryInstruction
         ].join("\n")
       }
     ],
@@ -208,16 +318,16 @@ function buildOpenAIRequest(input: GenerateRequest, virality: number) {
                 ],
                 properties: {
                   r: { type: "integer", minimum: 1, maximum: IDEA_COUNT },
-                  n: { type: "string", minLength: 2, maxLength: 44 },
-                  t: { type: "string", minLength: 8, maxLength: 78 },
+                  n: { type: "string", minLength: 2, maxLength: 58 },
+                  t: { type: "string", minLength: 8, maxLength: 140 },
                   p: {
                     type: "string",
                     enum: ["native mobile", "webapp", "desktop app", "cross-platform"]
                   },
-                  u: { type: "string", minLength: 4, maxLength: 80 },
-                  c: { type: "string", minLength: 28, maxLength: 190 },
-                  h: { type: "string", minLength: 12, maxLength: 120 },
-                  s: { type: "string", minLength: 12, maxLength: 120 },
+                  u: { type: "string", minLength: 4, maxLength: 150 },
+                  c: { type: "string", minLength: 28, maxLength: 280 },
+                  h: { type: "string", minLength: 12, maxLength: 180 },
+                  s: { type: "string", minLength: 12, maxLength: 180 },
                   d: { type: "string", enum: ["weekend", "one-week", "multi-week"] }
                 }
               }
@@ -226,7 +336,7 @@ function buildOpenAIRequest(input: GenerateRequest, virality: number) {
         }
       }
     },
-    max_output_tokens: 1600
+    max_output_tokens: isRetry ? 2600 : 2200
   };
 }
 
@@ -261,13 +371,13 @@ function normalizeIdeas(payload: unknown): IdeasResponse {
 
       return {
         rank: typeof compact.r === "number" ? compact.r : index + 1,
-        name: String(compact.n ?? ""),
-        tagline: String(compact.t ?? ""),
+        name: normalizeText(compact.n),
+        tagline: normalizeText(compact.t),
         platform: compact.p ?? "cross-platform",
-        targetUser: String(compact.u ?? ""),
-        concept: String(compact.c ?? ""),
-        viralHook: String(compact.h ?? ""),
-        buildScope: String(compact.s ?? ""),
+        targetUser: normalizeText(compact.u),
+        concept: normalizeText(compact.c),
+        viralHook: normalizeText(compact.h),
+        buildScope: normalizeText(compact.s),
         difficulty: compact.d ?? "one-week"
       };
     })
@@ -319,9 +429,10 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-function setGenerationTiming(res: ServerResponse, elapsedMs: number) {
+function setGenerationTiming(res: ServerResponse, elapsedMs: number, attempts = 1) {
   res.setHeader("Server-Timing", `openai;dur=${elapsedMs}`);
   res.setHeader("X-Generation-Time-Ms", String(elapsedMs));
+  res.setHeader("X-Generation-Attempts", String(attempts));
 }
 
 function clean(value: unknown) {
