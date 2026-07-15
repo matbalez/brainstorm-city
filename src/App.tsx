@@ -1,5 +1,5 @@
 import { FormEvent, useMemo, useState } from "react";
-import { Loader2, Sparkles } from "lucide-react";
+import { ArrowRight, Loader2 } from "lucide-react";
 
 type Platform = "native mobile" | "webapp" | "desktop app";
 
@@ -10,7 +10,6 @@ interface Idea {
   platform: Platform | "cross-platform";
   targetUser: string;
   concept: string;
-  whyNow: string;
   viralHook: string;
   buildScope: string;
   difficulty: "weekend" | "one-week" | "multi-week";
@@ -72,24 +71,23 @@ function App() {
     <main className="app-shell">
       <section className="intro-band" aria-labelledby="page-title">
         <div className="brand-lockup">
-          <img src="/brainstorm-city-logo.png" alt="" className="brand-logo" />
+          <img src="/brainstorm-city-logo.svg" alt="" className="brand-logo" />
           <div>
-            <p className="eyebrow">Hit app ideation</p>
             <h1 id="page-title">Brainstorm City</h1>
+            <p>Generate ranked app ideas.</p>
           </div>
         </div>
-        <p className="intro-copy">Ten crisp product bets, tuned for the platform, audience, and buzz level you want.</p>
       </section>
 
       <section className="workspace" aria-label="App idea generator">
         <form className="generator" onSubmit={generateIdeas}>
           <label className="field">
-            <span>Theme or direction</span>
+            <span>Direction</span>
             <textarea
               value={direction}
               onChange={(event) => setDirection(event.target.value)}
-              placeholder="Example: useful tools for creators, local communities, better meetings..."
-              rows={5}
+              placeholder="Useful tools for creators, local communities, better meetings..."
+              rows={4}
             />
           </label>
 
@@ -110,16 +108,16 @@ function App() {
           </fieldset>
 
           <label className="field">
-            <span>Target audience</span>
+            <span>Audience</span>
             <input
               value={targetAudience}
               onChange={(event) => setTargetAudience(event.target.value)}
-              placeholder="Example: indie hackers, nurses, teachers, new parents"
+              placeholder="Indie hackers, nurses, teachers, new parents"
             />
           </label>
 
           <label className="field virality-field">
-            <span>Virality</span>
+            <span>Reach</span>
             <input
               type="range"
               min="0"
@@ -130,13 +128,13 @@ function App() {
             <span className="range-row">
               <span>Niche</span>
               <strong>{viralityTone}</strong>
-              <span>Viral</span>
+              <span>Mass</span>
             </span>
           </label>
 
           <button className="generate-button" type="submit" disabled={isLoading}>
-            {isLoading ? <Loader2 aria-hidden="true" className="spin" size={18} /> : <Sparkles aria-hidden="true" size={18} />}
-            {isLoading ? "Generating" : "Generate app ideas"}
+            {isLoading ? <Loader2 aria-hidden="true" className="spin" size={18} /> : <ArrowRight aria-hidden="true" size={18} />}
+            {isLoading ? "Generating" : "Generate"}
           </button>
 
           {error ? <p className="error-panel">{error}</p> : null}
@@ -145,15 +143,14 @@ function App() {
         <div className="result-surface" aria-live="polite">
           {ideas.length === 0 && !isLoading ? (
             <div className="empty-state">
-              <span className="empty-kicker">City grid clear</span>
-              <p>Your ranked ideas will land here as polished build cards.</p>
+              <p>Results appear here.</p>
             </div>
           ) : null}
 
           {isLoading ? (
             <div className="loading-state">
               <span />
-              <p>Surveying markets, hooks, and weekend-build angles...</p>
+              <p>Generating...</p>
             </div>
           ) : null}
 
@@ -174,15 +171,11 @@ function App() {
                       <dd>{idea.targetUser}</dd>
                     </div>
                     <div>
-                      <dt>Why now</dt>
-                      <dd>{idea.whyNow}</dd>
-                    </div>
-                    <div>
-                      <dt>Viral hook</dt>
+                      <dt>Hook</dt>
                       <dd>{idea.viralHook}</dd>
                     </div>
                     <div>
-                      <dt>MVP scope</dt>
+                      <dt>MVP</dt>
                       <dd>{idea.buildScope}</dd>
                     </div>
                   </dl>

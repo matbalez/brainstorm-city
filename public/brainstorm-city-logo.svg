@@ -1,0 +1,5 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Brainstorm City">
+  <rect x="8" y="8" width="48" height="48" rx="10" fill="#101010"/>
+  <path d="M22 18H36C42.1 18 46 21.2 46 26.1C46 29.1 44.4 31.3 41.8 32.5C45.1 33.6 47 36.1 47 39.6C47 44.7 42.9 48 36.7 48H22V18ZM30 25V30H35.5C37.2 30 38.3 29 38.3 27.5C38.3 26 37.2 25 35.5 25H30ZM30 36V41H36.5C38.3 41 39.4 40 39.4 38.5C39.4 37 38.3 36 36.5 36H30Z" fill="#F8F8F8"/>
+  <path d="M18 18H12V48H18V18Z" fill="#F8F8F8"/>
+</svg>

@@ -12,6 +12,32 @@ interface GenerateRequest {
   virality?: number;
 }
 
+interface CompactIdea {
+  r: number;
+  n: string;
+  t: string;
+  p: Platform | "cross-platform";
+  u: string;
+  c: string;
+  h: string;
+  s: string;
+  d: "weekend" | "one-week" | "multi-week";
+}
+
+interface IdeasResponse {
+  ideas: Array<{
+    rank: number;
+    name: string;
+    tagline: string;
+    platform: CompactIdea["p"];
+    targetUser: string;
+    concept: string;
+    viralHook: string;
+    buildScope: string;
+    difficulty: CompactIdea["d"];
+  }>;
+}
+
 interface OpenAIResponsePayload {
   output_text?: string;
   output?: Array<{
@@ -25,6 +51,7 @@ interface OpenAIResponsePayload {
   };
 }
 
+const IDEA_COUNT = 5;
 const rootDir = process.cwd();
 const clientDir = resolve(rootDir, "dist", "client");
 const isProduction = process.env.NODE_ENV === "production";
@@ -89,6 +116,7 @@ async function handleGenerate(req: IncomingMessage, res: ServerResponse) {
   const body = await readJsonBody<GenerateRequest>(req);
   const virality = clamp(Number(body.virality ?? 55), 0, 100);
   const payload = buildOpenAIRequest(body, virality);
+  const startedAt = Date.now();
 
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -100,6 +128,7 @@ async function handleGenerate(req: IncomingMessage, res: ServerResponse) {
   });
 
   const responseBody = (await response.json()) as OpenAIResponsePayload;
+  setGenerationTiming(res, Date.now() - startedAt);
 
   if (!response.ok) {
     sendJson(res, response.status, {
@@ -109,7 +138,7 @@ async function handleGenerate(req: IncomingMessage, res: ServerResponse) {
   }
 
   const text = extractOutputText(responseBody);
-  const parsed = JSON.parse(text) as unknown;
+  const parsed = normalizeIdeas(JSON.parse(text) as unknown);
 
   sendJson(res, 200, parsed);
 }
@@ -124,27 +153,28 @@ async function createDevServer() {
 }
 
 function buildOpenAIRequest(input: GenerateRequest, virality: number) {
-  const platform = input.platform || "any app platform";
+  const model = clean(process.env.OPENAI_MODEL) || "gpt-5.6-luna";
+  const platform = clean(input.platform) || "any app platform";
   const direction = clean(input.direction) || "No specific theme. Find a sharp opportunity.";
   const audience = clean(input.targetAudience) || "A high-intent audience with a real recurring problem.";
 
   return {
-    model: process.env.OPENAI_MODEL || "gpt-5.5",
+    model,
     input: [
       {
         role: "system",
         content:
-          "You are a product strategist for fast prototype builders. Generate concrete, testable app ideas with clear user pain, believable scope, and memorable hooks. Avoid generic AI wrappers."
+          "You generate concise app concepts for prototype builders. Favor specific user pain, feasible MVPs, and non-generic hooks. Return compact JSON only."
       },
       {
         role: "user",
         content: [
-          "Create a ranked top 10 list of hit product ideas for vibe coding.",
+          `Create exactly ${IDEA_COUNT} ranked product ideas for vibe coding.`,
           `Direction: ${direction}`,
           `Preferred platform: ${platform}`,
           `Target audience: ${audience}`,
           `Virality target: ${virality}/100 (${viralityLabel(virality)}).`,
-          "Each idea should feel original, feasible for an MVP, and specific enough to start building."
+          "Keep c, h, and s to one sentence each. Avoid generic AI wrappers."
         ].join("\n")
       }
     ],
@@ -160,37 +190,35 @@ function buildOpenAIRequest(input: GenerateRequest, virality: number) {
           properties: {
             ideas: {
               type: "array",
-              minItems: 10,
-              maxItems: 10,
+              minItems: IDEA_COUNT,
+              maxItems: IDEA_COUNT,
               items: {
                 type: "object",
                 additionalProperties: false,
                 required: [
-                  "rank",
-                  "name",
-                  "tagline",
-                  "platform",
-                  "targetUser",
-                  "concept",
-                  "whyNow",
-                  "viralHook",
-                  "buildScope",
-                  "difficulty"
+                  "r",
+                  "n",
+                  "t",
+                  "p",
+                  "u",
+                  "c",
+                  "h",
+                  "s",
+                  "d"
                 ],
                 properties: {
-                  rank: { type: "integer", minimum: 1, maximum: 10 },
-                  name: { type: "string", minLength: 2, maxLength: 52 },
-                  tagline: { type: "string", minLength: 8, maxLength: 110 },
-                  platform: {
+                  r: { type: "integer", minimum: 1, maximum: IDEA_COUNT },
+                  n: { type: "string", minLength: 2, maxLength: 44 },
+                  t: { type: "string", minLength: 8, maxLength: 78 },
+                  p: {
                     type: "string",
                     enum: ["native mobile", "webapp", "desktop app", "cross-platform"]
                   },
-                  targetUser: { type: "string", minLength: 4, maxLength: 120 },
-                  concept: { type: "string", minLength: 40, maxLength: 420 },
-                  whyNow: { type: "string", minLength: 20, maxLength: 220 },
-                  viralHook: { type: "string", minLength: 16, maxLength: 220 },
-                  buildScope: { type: "string", minLength: 20, maxLength: 220 },
-                  difficulty: { type: "string", enum: ["weekend", "one-week", "multi-week"] }
+                  u: { type: "string", minLength: 4, maxLength: 80 },
+                  c: { type: "string", minLength: 28, maxLength: 190 },
+                  h: { type: "string", minLength: 12, maxLength: 120 },
+                  s: { type: "string", minLength: 12, maxLength: 120 },
+                  d: { type: "string", enum: ["weekend", "one-week", "multi-week"] }
                 }
               }
             }
@@ -198,7 +226,7 @@ function buildOpenAIRequest(input: GenerateRequest, virality: number) {
         }
       }
     },
-    max_output_tokens: 5000
+    max_output_tokens: 1600
   };
 }
 
@@ -218,6 +246,32 @@ function extractOutputText(payload: OpenAIResponsePayload) {
   }
 
   return text;
+}
+
+function normalizeIdeas(payload: unknown): IdeasResponse {
+  const ideas = typeof payload === "object" && payload && "ideas" in payload ? (payload.ideas as unknown) : null;
+
+  if (!Array.isArray(ideas)) {
+    throw new Error("OpenAI response JSON did not include ideas.");
+  }
+
+  return {
+    ideas: ideas.slice(0, IDEA_COUNT).map((idea, index) => {
+      const compact = idea as Partial<CompactIdea>;
+
+      return {
+        rank: typeof compact.r === "number" ? compact.r : index + 1,
+        name: String(compact.n ?? ""),
+        tagline: String(compact.t ?? ""),
+        platform: compact.p ?? "cross-platform",
+        targetUser: String(compact.u ?? ""),
+        concept: String(compact.c ?? ""),
+        viralHook: String(compact.h ?? ""),
+        buildScope: String(compact.s ?? ""),
+        difficulty: compact.d ?? "one-week"
+      };
+    })
+  };
 }
 
 async function readJsonBody<T>(req: IncomingMessage): Promise<T> {
@@ -263,6 +317,11 @@ function serveStatic(req: IncomingMessage, res: ServerResponse) {
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(body));
+}
+
+function setGenerationTiming(res: ServerResponse, elapsedMs: number) {
+  res.setHeader("Server-Timing", `openai;dur=${elapsedMs}`);
+  res.setHeader("X-Generation-Time-Ms", String(elapsedMs));
 }
 
 function clean(value: unknown) {
