@@ -2,7 +2,6 @@ import { createReadStream, existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 type Platform = "native mobile" | "webapp" | "desktop app";
 
@@ -26,8 +25,7 @@ interface OpenAIResponsePayload {
   };
 }
 
-const __dirname = fileURLToPath(new URL(".", import.meta.url));
-const rootDir = resolve(__dirname, "..", "..");
+const rootDir = process.cwd();
 const clientDir = resolve(rootDir, "dist", "client");
 const isProduction = process.env.NODE_ENV === "production";
 const port = Number(process.env.PORT ?? 8080);
