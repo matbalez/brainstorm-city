@@ -52,6 +52,7 @@ interface OpenAIResponsePayload {
 }
 
 const IDEA_COUNT = 5;
+const leadingRankPattern = /^(?:(?:rank|no\.?|number)\s*)?#?\d+\s*(?:[.)\-:]\s*|\s+(?=[A-Z]))/i;
 const textFields = ["name", "tagline", "targetUser", "concept", "viralHook", "buildScope"] as const;
 const danglingEndWords = new Set([
   "a",
@@ -219,6 +220,10 @@ function hasCleanField(field: (typeof textFields)[number], text: string) {
     return false;
   }
 
+  if (field === "name" && hasLeadingRank(text)) {
+    return false;
+  }
+
   if (field === "targetUser" && /^(It|This|That|The app)\b/.test(text)) {
     return false;
   }
@@ -260,6 +265,20 @@ function normalizeText(value: unknown) {
     .trim();
 }
 
+function normalizeName(value: unknown) {
+  let text = normalizeText(value);
+
+  for (let index = 0; index < 2 && hasLeadingRank(text); index += 1) {
+    text = text.replace(leadingRankPattern, "").trim();
+  }
+
+  return text;
+}
+
+function hasLeadingRank(text: string) {
+  return leadingRankPattern.test(text);
+}
+
 async function createDevServer() {
   const { createServer: createViteServer } = await import("vite");
 
@@ -295,6 +314,7 @@ function buildOpenAIRequest(input: GenerateRequest, virality: number, isRetry = 
           `Target audience: ${audience}`,
           `Virality target: ${virality}/100 (${viralityLabel(virality)}).`,
           "Field meanings: n=app name, t=tagline, p=platform, u=target audience noun phrase, c=concept sentence, h=share hook, s=MVP scope, d=difficulty.",
+          "Do not include ranks, numbers, bullets, or list markers in n; ranking belongs only in r.",
           "Keep c, h, and s to one sentence each. Avoid generic AI wrappers.",
           "Use plain ASCII punctuation. Do not use markdown.",
           retryInstruction
@@ -384,7 +404,7 @@ function normalizeIdeas(payload: unknown): IdeasResponse {
 
       return {
         rank: typeof compact.r === "number" ? compact.r : index + 1,
-        name: normalizeText(compact.n),
+        name: normalizeName(compact.n),
         tagline: normalizeText(compact.t),
         platform: compact.p ?? "cross-platform",
         targetUser: normalizeText(compact.u),
