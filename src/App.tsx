@@ -1,5 +1,5 @@
 import { FormEvent, useMemo, useState } from "react";
-import { ArrowRight, Loader2 } from "lucide-react";
+import { ArrowRight, Check, Copy, Loader2 } from "lucide-react";
 
 type Platform = "native mobile" | "webapp" | "desktop app";
 
@@ -29,6 +29,7 @@ function App() {
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [copiedRank, setCopiedRank] = useState<number | null>(null);
 
   const viralityTone = useMemo(() => {
     if (virality < 34) return "Focused";
@@ -64,6 +65,31 @@ function App() {
       setError(caught instanceof Error ? caught.message : "Brainstorm City could not generate ideas.");
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  async function copyIdea(idea: Idea) {
+    const text = [
+      `#${idea.rank} ${idea.name}`,
+      idea.tagline,
+      "",
+      idea.concept,
+      "",
+      `Platform: ${idea.platform}`,
+      `Audience: ${idea.targetUser}`,
+      `Hook: ${idea.viralHook}`,
+      `MVP: ${idea.buildScope}`,
+      `Difficulty: ${idea.difficulty}`
+    ].join("\n");
+
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedRank(idea.rank);
+      window.setTimeout(() => {
+        setCopiedRank((current) => (current === idea.rank ? null : current));
+      }, 1600);
+    } catch {
+      setError("Could not copy — your browser blocked clipboard access.");
     }
   }
 
@@ -160,7 +186,22 @@ function App() {
                 <article className="idea-card" key={`${idea.rank}-${idea.name}`}>
                   <div className="idea-card-header">
                     <span className="rank">#{idea.rank}</span>
-                    <span className="platform-pill">{idea.platform}</span>
+                    <div className="card-actions">
+                      <span className="platform-pill">{idea.platform}</span>
+                      <button
+                        type="button"
+                        className={copiedRank === idea.rank ? "copy-button copied" : "copy-button"}
+                        onClick={() => copyIdea(idea)}
+                        aria-label={`Copy ${idea.name} to clipboard`}
+                      >
+                        {copiedRank === idea.rank ? (
+                          <Check aria-hidden="true" size={13} />
+                        ) : (
+                          <Copy aria-hidden="true" size={13} />
+                        )}
+                        {copiedRank === idea.rank ? "Copied" : "Copy"}
+                      </button>
+                    </div>
                   </div>
                   <h2>{idea.name}</h2>
                   <p className="tagline">{idea.tagline}</p>
