@@ -8,6 +8,9 @@ primary_region = "sjc"
   NODE_ENV = "production"
   PORT = "8080"
   OPENAI_MODEL = "gpt-5.6-luna"
+  PUBLIC_ORIGIN = "https://brainstorm-city.fly.dev"
+  BUZZ_RELAY_URL = "https://flint.communities.buzz.xyz"
+  BUZZ_CHANNEL_CREATOR_PUBKEY = "5630c46628625e3d69756723ca537f20e3a5a035266015b079f406d21df7e44e"
 
 [http_service]
   internal_port = 8080

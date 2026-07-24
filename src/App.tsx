@@ -1,22 +1,20 @@
-import { FormEvent, useMemo, useState } from "react";
-import { ArrowRight, Check, Copy, Loader2 } from "lucide-react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowRight, Check, Copy, Hammer, Loader2, X } from "lucide-react";
+
+import { signBuildRequest, type BuzzBuildIdea } from "./buildOnBuzz";
 
 type Platform = "native mobile" | "webapp" | "desktop app";
 
-interface Idea {
-  rank: number;
-  name: string;
-  tagline: string;
-  platform: Platform | "cross-platform";
-  targetUser: string;
-  concept: string;
-  viralHook: string;
-  buildScope: string;
-  difficulty: "weekend" | "one-week" | "multi-week";
-}
+type Idea = BuzzBuildIdea;
 
 interface IdeasResponse {
   ideas: Idea[];
+}
+
+interface BuildResponse {
+  channelId?: string;
+  channelName?: string;
+  message?: string;
 }
 
 const platforms: Platform[] = ["native mobile", "webapp", "desktop app"];
@@ -30,12 +28,30 @@ function App() {
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [copiedRank, setCopiedRank] = useState<number | null>(null);
+  const [selectedIdea, setSelectedIdea] = useState<Idea | null>(null);
+  const [buildError, setBuildError] = useState("");
+  const [buildResult, setBuildResult] = useState<BuildResponse | null>(null);
+  const [isBuilding, setIsBuilding] = useState(false);
+  const buildDialogRef = useRef<HTMLDialogElement>(null);
+  const nsecInputRef = useRef<HTMLInputElement>(null);
 
   const viralityTone = useMemo(() => {
     if (virality < 34) return "Focused";
     if (virality < 67) return "Shareable";
     return "Wildfire";
   }, [virality]);
+
+  useEffect(() => {
+    const dialog = buildDialogRef.current;
+    if (!dialog) return;
+
+    if (selectedIdea && !dialog.open) {
+      dialog.showModal();
+      window.setTimeout(() => nsecInputRef.current?.focus(), 0);
+    } else if (!selectedIdea && dialog.open) {
+      dialog.close();
+    }
+  }, [selectedIdea]);
 
   async function generateIdeas(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -90,6 +106,59 @@ function App() {
       }, 1600);
     } catch {
       setError("Could not copy — your browser blocked clipboard access.");
+    }
+  }
+
+  function openBuildDialog(idea: Idea) {
+    setBuildError("");
+    setBuildResult(null);
+    setSelectedIdea(idea);
+  }
+
+  function closeBuildDialog() {
+    if (isBuilding) return;
+    if (nsecInputRef.current) nsecInputRef.current.value = "";
+    setSelectedIdea(null);
+    setBuildError("");
+    setBuildResult(null);
+  }
+
+  async function buildOnBuzz(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedIdea || !nsecInputRef.current) return;
+
+    setBuildError("");
+    setBuildResult(null);
+    setIsBuilding(true);
+
+    try {
+      const signed = await signBuildRequest(nsecInputRef.current.value, selectedIdea);
+      nsecInputRef.current.value = "";
+
+      const response = await fetch("/api/build-on-buzz", {
+        method: "POST",
+        headers: {
+          Authorization: signed.authorization,
+          "Content-Type": "application/json"
+        },
+        body: signed.body
+      });
+      const data = (await response.json()) as BuildResponse;
+
+      if (!response.ok) {
+        throw new Error(data.message ?? "Brainstorm City could not create the Buzz build room.");
+      }
+
+      setBuildResult(data);
+    } catch (caught) {
+      setBuildError(
+        caught instanceof Error
+          ? caught.message
+          : "Brainstorm City could not create the Buzz build room."
+      );
+    } finally {
+      if (nsecInputRef.current) nsecInputRef.current.value = "";
+      setIsBuilding(false);
     }
   }
 
@@ -220,13 +289,110 @@ function App() {
                       <dd>{idea.buildScope}</dd>
                     </div>
                   </dl>
-                  <span className="difficulty">{idea.difficulty}</span>
+                  <div className="idea-card-footer">
+                    <span className="difficulty">{idea.difficulty}</span>
+                    <button
+                      type="button"
+                      className="build-button"
+                      onClick={() => openBuildDialog(idea)}
+                    >
+                      <Hammer aria-hidden="true" size={14} />
+                      Build it on Buzz
+                    </button>
+                  </div>
                 </article>
               ))}
             </div>
           ) : null}
         </div>
       </section>
+
+      <dialog
+        ref={buildDialogRef}
+        className="build-dialog"
+        aria-labelledby="build-dialog-title"
+        onCancel={(event) => {
+          event.preventDefault();
+          closeBuildDialog();
+        }}
+      >
+        {selectedIdea ? (
+          <form className="build-dialog-form" onSubmit={buildOnBuzz}>
+            <div className="build-dialog-heading">
+              <div>
+                <p className="dialog-kicker">Build on Buzz</p>
+                <h2 id="build-dialog-title">{selectedIdea.name}</h2>
+              </div>
+              <button
+                type="button"
+                className="dialog-close"
+                onClick={closeBuildDialog}
+                disabled={isBuilding}
+                aria-label="Close build dialog"
+              >
+                <X aria-hidden="true" size={18} />
+              </button>
+            </div>
+
+            {buildResult ? (
+              <div className="build-success" role="status">
+                <Check aria-hidden="true" size={20} />
+                <div>
+                  <strong>Build room created</strong>
+                  <p>
+                    <span>{buildResult.channelName}</span> is waiting in Flint with the full idea
+                    and your kickoff mention.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <>
+                <label className="field">
+                  <span>Enter your nsec for the Flint Buzz community</span>
+                  <input
+                    ref={nsecInputRef}
+                    type="password"
+                    name="flint-nsec"
+                    placeholder="nsec1..."
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    disabled={isBuilding}
+                    required
+                  />
+                </label>
+                <p className="security-note">
+                  Your nsec stays in this browser. It signs one short-lived authorization and is
+                  cleared immediately; Brainstorm City never sends or stores the key.
+                </p>
+              </>
+            )}
+
+            {buildError ? <p className="error-panel">{buildError}</p> : null}
+
+            <div className="dialog-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={closeBuildDialog}
+                disabled={isBuilding}
+              >
+                {buildResult ? "Done" : "Cancel"}
+              </button>
+              {!buildResult ? (
+                <button className="build-submit" type="submit" disabled={isBuilding}>
+                  {isBuilding ? (
+                    <Loader2 aria-hidden="true" className="spin" size={17} />
+                  ) : (
+                    <Hammer aria-hidden="true" size={17} />
+                  )}
+                  {isBuilding ? "Creating room" : "Create build room"}
+                </button>
+              ) : null}
+            </div>
+          </form>
+        ) : null}
+      </dialog>
     </main>
   );
 }
