@@ -337,6 +337,43 @@ input:focus {
   color: #ffffff;
 }
 
+.idea-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.build-button,
+.build-submit,
+.secondary-button,
+.dialog-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.build-button {
+  min-height: 34px;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid #101010;
+  border-radius: 7px;
+  background: #101010;
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 820;
+  transition:
+    transform 140ms ease,
+    background-color 140ms ease;
+}
+
+.build-button:hover {
+  transform: translateY(-1px);
+  background: #2a2a28;
+}
+
 .platform-pill,
 .difficulty {
   width: fit-content;
@@ -392,6 +429,149 @@ dd {
   line-height: 1.42;
 }
 
+.build-dialog {
+  width: min(500px, calc(100% - 28px));
+  max-height: calc(100dvh - 28px);
+  margin: auto;
+  padding: 0;
+  overflow: auto;
+  border: 1px solid #bdbdb6;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #101010;
+  box-shadow: 0 28px 80px rgba(16, 16, 16, 0.24);
+}
+
+.build-dialog::backdrop {
+  background: rgba(16, 16, 16, 0.54);
+  backdrop-filter: blur(3px);
+}
+
+.build-dialog-form {
+  display: grid;
+  gap: 18px;
+  padding: 20px;
+}
+
+.build-dialog-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.dialog-kicker {
+  margin-bottom: 5px;
+  color: #74746d;
+  font-size: 0.7rem;
+  font-weight: 820;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.build-dialog-heading h2 {
+  margin: 0;
+  font-size: 1.3rem;
+  line-height: 1.2;
+}
+
+.dialog-close {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid #d8d8d2;
+  border-radius: 7px;
+  background: #f6f6f3;
+  color: #4c4c47;
+}
+
+.dialog-close:hover:not(:disabled) {
+  border-color: #101010;
+  color: #101010;
+}
+
+.security-note {
+  margin: -7px 0 0;
+  color: #686861;
+  font-size: 0.78rem;
+  line-height: 1.48;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.secondary-button,
+.build-submit {
+  min-height: 42px;
+  padding: 9px 14px;
+  border-radius: 8px;
+  font-weight: 800;
+}
+
+.secondary-button {
+  border: 1px solid #cfcfca;
+  background: #ffffff;
+  color: #41413d;
+}
+
+.secondary-button:hover:not(:disabled) {
+  border-color: #101010;
+  color: #101010;
+}
+
+.build-submit {
+  gap: 7px;
+  border: 1px solid #101010;
+  background: #101010;
+  color: #ffffff;
+}
+
+.build-submit:hover:not(:disabled) {
+  background: #2a2a28;
+}
+
+.build-submit:disabled,
+.secondary-button:disabled,
+.dialog-close:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.build-success {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 14px;
+  border: 1px solid #bfc9ba;
+  border-radius: 8px;
+  background: #f4f8f2;
+  color: #263422;
+}
+
+.build-success svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.build-success strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.build-success p {
+  margin: 0;
+  color: #465442;
+  line-height: 1.48;
+}
+
+.build-success span {
+  font-weight: 760;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -442,6 +622,28 @@ dd {
   .generator,
   .idea-card {
     padding: 14px;
+  }
+
+  .idea-card-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .difficulty {
+    align-self: flex-start;
+  }
+
+  .build-button {
+    width: 100%;
+  }
+
+  .build-dialog-form {
+    padding: 17px;
+  }
+
+  .dialog-actions {
+    display: grid;
+    grid-template-columns: 1fr 1.4fr;
   }
 
   .segmented {

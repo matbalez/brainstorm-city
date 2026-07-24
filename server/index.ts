@@ -3,6 +3,18 @@ import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
 
+import {
+  AuthorizationReplayGuard,
+  BuildOnBuzzError,
+  BuildRateLimiter,
+  addBuildToken,
+  confirmFlintMembership,
+  createBuildChannel,
+  normalizeRelayHttpUrl,
+  verifyBuildRequest,
+  type BuzzBuildConfig
+} from "./buzz.js";
+
 type Platform = "native mobile" | "webapp" | "desktop app";
 
 interface GenerateRequest {
@@ -81,6 +93,18 @@ const port = Number(process.env.PORT ?? 8080);
 
 await loadLocalEnv();
 const viteServer = isProduction ? null : await createDevServer();
+const buzzBuildConfig: BuzzBuildConfig = {
+  channelCreatorNsec: process.env.BUZZ_CHANNEL_CREATOR_NSEC ?? "",
+  expectedCreatorPubkey: process.env.BUZZ_CHANNEL_CREATOR_PUBKEY,
+  publicOrigin:
+    clean(process.env.PUBLIC_ORIGIN) ||
+    (isProduction ? "https://brainstorm-city.fly.dev" : `http://localhost:${port}`),
+  relayHttpUrl: normalizeRelayHttpUrl(
+    process.env.BUZZ_RELAY_URL ?? "https://flint.communities.buzz.xyz"
+  )
+};
+const buildAuthorizationReplayGuard = new AuthorizationReplayGuard();
+const buildRateLimiter = new BuildRateLimiter();
 
 const mimeTypes: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -94,6 +118,11 @@ const mimeTypes: Record<string, string> = {
 
 const app = createServer(async (req, res) => {
   try {
+    if (req.method === "POST" && req.url === "/api/build-on-buzz") {
+      await handleBuildOnBuzz(req, res);
+      return;
+    }
+
     if (req.method === "POST" && req.url === "/api/generate") {
       await handleGenerate(req, res);
       return;
@@ -159,7 +188,11 @@ async function handleGenerate(req: IncomingMessage, res: ServerResponse) {
       return;
     }
 
-    sendJson(res, 200, parsed);
+    sendJson(res, 200, {
+      ideas: parsed.ideas.map((idea) =>
+        addBuildToken(idea, buzzBuildConfig.channelCreatorNsec)
+      )
+    });
   } catch (caught) {
     setGenerationTiming(res, Date.now() - startedAt, attempts);
 
@@ -169,6 +202,42 @@ async function handleGenerate(req: IncomingMessage, res: ServerResponse) {
     }
 
     throw caught;
+  }
+}
+
+async function handleBuildOnBuzz(req: IncomingMessage, res: ServerResponse) {
+  if (!buzzBuildConfig.channelCreatorNsec) {
+    sendJson(res, 503, {
+      code: "missing_buzz_channel_creator",
+      message: "Buzz channel creation is not configured yet."
+    });
+    return;
+  }
+
+  try {
+    const rawBody = await readRequestBody(req, 32_768);
+    const verified = verifyBuildRequest(req.headers.authorization, rawBody, buzzBuildConfig);
+    buildAuthorizationReplayGuard.consume(verified.authorizationId);
+    buildRateLimiter.consume(verified.userPubkey);
+    await confirmFlintMembership(verified, buzzBuildConfig.relayHttpUrl);
+    const result = await createBuildChannel(verified, buzzBuildConfig);
+
+    sendJson(res, 201, {
+      channelId: result.channelId,
+      channelName: result.channelName,
+      messageEventId: result.messageEventId
+    });
+  } catch (caught) {
+    if (caught instanceof BuildOnBuzzError) {
+      console.warn(`Build on Buzz rejected: ${caught.message}`);
+      sendJson(res, caught.status, { message: caught.publicMessage });
+      return;
+    }
+
+    console.error("Build on Buzz failed:", caught);
+    sendJson(res, 502, {
+      message: "Brainstorm City could not create the Buzz build room. Please try again."
+    });
   }
 }
 
@@ -418,6 +487,11 @@ function normalizeIdeas(payload: unknown): IdeasResponse {
 }
 
 async function readJsonBody<T>(req: IncomingMessage): Promise<T> {
+  const raw = await readRequestBody(req, 1_000_000);
+  return raw.byteLength > 0 ? (JSON.parse(raw.toString("utf8")) as T) : ({} as T);
+}
+
+async function readRequestBody(req: IncomingMessage, maxBytes: number) {
   const chunks: Buffer[] = [];
   let size = 0;
 
@@ -425,15 +499,14 @@ async function readJsonBody<T>(req: IncomingMessage): Promise<T> {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.byteLength;
 
-    if (size > 1_000_000) {
+    if (size > maxBytes) {
       throw new Error("Request body is too large.");
     }
 
     chunks.push(buffer);
   }
 
-  const raw = Buffer.concat(chunks).toString("utf8");
-  return raw ? (JSON.parse(raw) as T) : ({} as T);
+  return Buffer.concat(chunks);
 }
 
 function serveStatic(req: IncomingMessage, res: ServerResponse) {
@@ -452,14 +525,32 @@ function serveStatic(req: IncomingMessage, res: ServerResponse) {
 
   res.writeHead(200, {
     "Content-Type": mimeTypes[extension] ?? "application/octet-stream",
-    "Cache-Control": extension === ".html" ? "no-store" : "public, max-age=31536000, immutable"
+    "Cache-Control": extension === ".html" ? "no-store" : "public, max-age=31536000, immutable",
+    ...securityHeaders()
   });
   createReadStream(target).pipe(res);
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
-  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    ...securityHeaders()
+  });
   res.end(JSON.stringify(body));
+}
+
+function securityHeaders() {
+  if (!isProduction) return {};
+
+  return {
+    "Content-Security-Policy":
+      "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'",
+    "Permissions-Policy": "camera=(), geolocation=(), microphone=()",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY"
+  };
 }
 
 function setGenerationTiming(res: ServerResponse, elapsedMs: number, attempts = 1) {
