@@ -32,6 +32,17 @@ export interface BuildOnBuzzRequest {
   idea: BuildableIdea;
   requestId: string;
   relayAuthorization: NostrEvent;
+  agentCommand?: SignedAgentCommand;
+}
+
+export interface SignedAgentCommand {
+  agentPubkey: string;
+  addEvent: NostrEvent;
+  addEventBody: string;
+  addRelayAuthorization: NostrEvent;
+  commandEvent: NostrEvent;
+  commandEventBody: string;
+  commandRelayAuthorization: NostrEvent;
 }
 
 export interface VerifiedBuildRequest {
@@ -45,6 +56,7 @@ export interface BuzzBuildConfig {
   expectedCreatorPubkey?: string;
   publicOrigin: string;
   relayHttpUrl: string;
+  generalChannelId: string;
 }
 
 export interface BuildChannelResult {
@@ -52,6 +64,8 @@ export interface BuildChannelResult {
   channelName: string;
   creatorPubkey: string;
   messageEventId: string;
+  agentMessageEventId?: string;
+  announcementEventId: string;
 }
 
 interface RelayWriteResponse {
@@ -61,6 +75,7 @@ interface RelayWriteResponse {
 }
 
 const NIP98_KIND = 27235;
+const BOT_COMMAND = "build the idea described above. one shot, make no mistakes.";
 const AUTH_MAX_AGE_SECONDS = 120;
 const AUTH_MAX_FUTURE_SECONDS = 30;
 const RELAY_TIMEOUT_MS = 12_000;
@@ -178,6 +193,16 @@ export function verifyBuildRequest(
     throw new BuildOnBuzzError(401, "The Flint authorization does not match this nsec.");
   }
 
+  if (request.agentCommand) {
+    verifyAgentCommand(
+      request.agentCommand,
+      authorization.pubkey,
+      request.requestId,
+      relayHttpUrl,
+      nowSeconds
+    );
+  }
+
   if (!verifyBuildToken(request.idea, config.channelCreatorNsec)) {
     throw new BuildOnBuzzError(
       401,
@@ -236,6 +261,7 @@ export async function createBuildChannel(
   const channelId = verified.request.requestId;
   const channelName = buildChannelName(verified.request.idea.name, channelId);
   const creatorPubkey = getPublicKey(serviceKey);
+  const agentCommand = verified.request.agentCommand;
 
   try {
     const expectedCreator = config.expectedCreatorPubkey?.trim().toLowerCase();
@@ -246,6 +272,17 @@ export async function createBuildChannel(
         "Configured Buzz channel creator key does not match the expected pubkey"
       );
     }
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        config.generalChannelId
+      )
+    ) {
+      throw new BuildOnBuzzError(
+        503,
+        "Buzz channel creation is not configured correctly yet.",
+        "BUZZ_GENERAL_CHANNEL_ID is missing or invalid"
+      );
+    }
 
     await submitRelayEvent(
       {
@@ -254,7 +291,7 @@ export async function createBuildChannel(
         tags: [
           ["h", channelId],
           ["name", channelName],
-          ["visibility", "private"],
+          ["visibility", "open"],
           ["channel_type", "stream"],
           ["about", `Build room created from Brainstorm City for ${verified.request.idea.name}.`]
         ]
@@ -281,6 +318,17 @@ export async function createBuildChannel(
       );
     }
 
+    if (agentCommand && agentCommand.agentPubkey !== creatorPubkey) {
+      await submitSignedRelayEvent(
+        agentCommand.addEventBody,
+        agentCommand.addRelayAuthorization,
+        relayBase,
+        fetchImpl,
+        "Buzz could not add that build agent. Check its pubkey or channel-add policy and try again.",
+        "Relay user-signed agent add"
+      );
+    }
+
     const displayName = await lookupDisplayName(
       verified.userPubkey,
       serviceKey,
@@ -290,7 +338,11 @@ export async function createBuildChannel(
     const mention = displayName
       ? `@${displayName}`
       : `nostr:${npubEncode(verified.userPubkey)}`;
-    const message = formatBuildKickoff(verified.request.idea, mention);
+    const message = formatBuildKickoff(
+      verified.request.idea,
+      mention,
+      Boolean(agentCommand)
+    );
     const messageResponse = await submitRelayEvent(
       {
         kind: 9,
@@ -305,11 +357,41 @@ export async function createBuildChannel(
       fetchImpl
     );
 
+    const agentMessageResponse = agentCommand
+      ? await submitSignedRelayEvent(
+          agentCommand.commandEventBody,
+          agentCommand.commandRelayAuthorization,
+          relayBase,
+          fetchImpl,
+          "Buzz could not deliver the signed build-agent command. Please try again.",
+          "Relay user command"
+        )
+      : undefined;
+    const announcementResponse = await submitRelayEvent(
+      {
+        kind: 9,
+        content: formatGeneralAnnouncement(
+          verified.request.idea,
+          channelName,
+          channelId,
+          messageResponse.event_id ?? ""
+        ),
+        tags: [["h", config.generalChannelId]]
+      },
+      serviceKey,
+      relayBase,
+      fetchImpl
+    );
+
     return {
       channelId,
       channelName,
       creatorPubkey,
-      messageEventId: messageResponse.event_id ?? ""
+      messageEventId: messageResponse.event_id ?? "",
+      ...(agentMessageResponse?.event_id
+        ? { agentMessageEventId: agentMessageResponse.event_id }
+        : {}),
+      announcementEventId: announcementResponse.event_id ?? ""
     };
   } catch (caught) {
     if (channelCreated) {
@@ -330,7 +412,7 @@ export async function createBuildChannel(
   }
 }
 
-export function formatBuildKickoff(idea: BuildIdea, mention: string) {
+export function formatBuildKickoff(idea: BuildIdea, mention: string, hasAgent = false) {
   return [
     `# Build brief: ${idea.name}`,
     "",
@@ -345,7 +427,26 @@ export function formatBuildKickoff(idea: BuildIdea, mention: string) {
     `MVP: ${idea.buildScope}`,
     `Difficulty: ${idea.difficulty}`,
     "",
-    `${mention}, add your favorite agent to this channel and ask them to build it. Share the repository and any constraints, then let the agent take the first implementation shift.`
+    hasAgent
+      ? `${mention}, your selected build agent has been added and will receive your one-shot build command next.`
+      : `${mention}, add your favorite agent to this channel and ask them to build it. Share the repository and any constraints, then let the agent take the first implementation shift.`
+  ].join("\n");
+}
+
+export function formatAgentCommand(agentPubkey: string) {
+  return `nostr:${npubEncode(agentPubkey)} ${BOT_COMMAND}`;
+}
+
+export function formatGeneralAnnouncement(
+  idea: BuildIdea,
+  channelName: string,
+  channelId: string,
+  messageEventId: string
+) {
+  return [
+    `A new Brainstorm City build is live: **${idea.name}**`,
+    "",
+    `[Open #${channelName}](buzz://message?channel=${channelId}&id=${messageEventId})`
   ].join("\n");
 }
 
@@ -377,7 +478,60 @@ function parseBuildRequest(rawBody: Buffer): BuildOnBuzzRequest {
   return {
     idea: parseIdea(record.idea),
     requestId,
-    relayAuthorization: parseNostrEvent(record.relayAuthorization, "The Flint authorization is invalid.")
+    relayAuthorization: parseNostrEvent(record.relayAuthorization, "The Flint authorization is invalid."),
+    ...(record.agentCommand === undefined
+      ? {}
+      : { agentCommand: parseAgentCommand(record.agentCommand) })
+  };
+}
+
+function parseAgentCommand(value: unknown): SignedAgentCommand {
+  if (!value || typeof value !== "object") {
+    throw new BuildOnBuzzError(400, "The build agent command is invalid.");
+  }
+
+  const record = value as Record<string, unknown>;
+  const agentPubkey = stringValue(record.agentPubkey).toLowerCase();
+  const addEventBody =
+    typeof record.addEventBody === "string" ? record.addEventBody : "";
+  const commandEventBody =
+    typeof record.commandEventBody === "string" ? record.commandEventBody : "";
+  if (
+    !/^[0-9a-f]{64}$/.test(agentPubkey) ||
+    !addEventBody ||
+    addEventBody.length > 12_000 ||
+    !commandEventBody ||
+    commandEventBody.length > 12_000
+  ) {
+    throw new BuildOnBuzzError(400, "The build agent pubkey or command is invalid.");
+  }
+
+  let addEventValue: unknown;
+  let commandEventValue: unknown;
+  try {
+    addEventValue = JSON.parse(addEventBody);
+    commandEventValue = JSON.parse(commandEventBody);
+  } catch {
+    throw new BuildOnBuzzError(400, "The signed build agent handoff is invalid.");
+  }
+
+  return {
+    agentPubkey,
+    addEvent: parseNostrEvent(addEventValue, "The signed build agent addition is invalid."),
+    addEventBody,
+    addRelayAuthorization: parseNostrEvent(
+      record.addRelayAuthorization,
+      "The build agent addition authorization is invalid."
+    ),
+    commandEvent: parseNostrEvent(
+      commandEventValue,
+      "The signed build agent command is invalid."
+    ),
+    commandEventBody,
+    commandRelayAuthorization: parseNostrEvent(
+      record.commandRelayAuthorization,
+      "The build agent relay authorization is invalid."
+    )
   };
 }
 
@@ -497,6 +651,114 @@ function verifyNip98Event(
   }
 }
 
+function verifyAgentCommand(
+  command: SignedAgentCommand,
+  userPubkey: string,
+  channelId: string,
+  relayHttpUrl: string,
+  nowSeconds: number
+) {
+  if (command.agentPubkey === userPubkey) {
+    throw new BuildOnBuzzError(400, "The build agent pubkey must be different from your pubkey.");
+  }
+  verifyExactAgentEvent(
+    command.addEvent,
+    userPubkey,
+    channelId,
+    command.agentPubkey,
+    9000,
+    "",
+    nowSeconds,
+    "addition"
+  );
+  verifyExactAgentEvent(
+    command.commandEvent,
+    userPubkey,
+    channelId,
+    command.agentPubkey,
+    9,
+    formatAgentCommand(command.agentPubkey),
+    nowSeconds,
+    "command"
+  );
+  verifyAgentRelayAuthorization(
+    command.addRelayAuthorization,
+    userPubkey,
+    command.addEventBody,
+    relayHttpUrl,
+    nowSeconds,
+    "addition"
+  );
+  verifyAgentRelayAuthorization(
+    command.commandRelayAuthorization,
+    userPubkey,
+    command.commandEventBody,
+    relayHttpUrl,
+    nowSeconds,
+    "command"
+  );
+}
+
+function verifyExactAgentEvent(
+  event: NostrEvent,
+  userPubkey: string,
+  channelId: string,
+  agentPubkey: string,
+  kind: number,
+  content: string,
+  nowSeconds: number,
+  label: string
+) {
+  if (
+    event.pubkey !== userPubkey ||
+    event.kind !== kind ||
+    event.content !== content ||
+    event.tags.length !== 2 ||
+    event.tags[0]?.length !== 2 ||
+    event.tags[0]?.[0] !== "h" ||
+    event.tags[0]?.[1] !== channelId ||
+    event.tags[1]?.length !== 2 ||
+    event.tags[1]?.[0] !== "p" ||
+    event.tags[1]?.[1] !== agentPubkey
+  ) {
+    throw new BuildOnBuzzError(
+      401,
+      `The signed build agent ${label} does not match this room.`
+    );
+  }
+
+  const age = nowSeconds - event.created_at;
+  if (age > AUTH_MAX_AGE_SECONDS || age < -AUTH_MAX_FUTURE_SECONDS) {
+    throw new BuildOnBuzzError(
+      401,
+      `The signed build agent ${label} expired. Please try again.`
+    );
+  }
+}
+
+function verifyAgentRelayAuthorization(
+  authorization: NostrEvent,
+  userPubkey: string,
+  eventBody: string,
+  relayHttpUrl: string,
+  nowSeconds: number,
+  label: string
+) {
+  if (authorization.pubkey !== userPubkey) {
+    throw new BuildOnBuzzError(
+      401,
+      `The build agent ${label} authorization does not match this nsec.`
+    );
+  }
+
+  verifyNip98Event(authorization, {
+    body: Buffer.from(eventBody),
+    method: "POST",
+    nowSeconds,
+    url: `${relayHttpUrl}/events`
+  });
+}
+
 function singleTagValue(event: NostrEvent, name: string) {
   const matches = event.tags.filter((tag) => tag[0] === name && typeof tag[1] === "string");
   return matches.length === 1 ? matches[0][1] : undefined;
@@ -541,7 +803,44 @@ async function submitRelayEvent(
     );
   }
 
-  return result;
+  return {
+    ...result,
+    event_id: result.event_id ?? event.id
+  };
+}
+
+async function submitSignedRelayEvent(
+  eventBody: string,
+  relayAuthorization: NostrEvent,
+  relayBase: string,
+  fetchImpl: typeof fetch,
+  publicMessage: string,
+  internalLabel: string
+) {
+  const response = await fetchImpl(`${relayBase}/events`, {
+    method: "POST",
+    headers: {
+      Authorization: encodeAuthorizationHeader(relayAuthorization),
+      "Content-Type": "application/json"
+    },
+    body: eventBody,
+    signal: AbortSignal.timeout(RELAY_TIMEOUT_MS)
+  });
+  const result = (await response.json().catch(() => ({}))) as RelayWriteResponse;
+
+  if (!response.ok || result.accepted !== true) {
+    throw new BuildOnBuzzError(
+      response.status === 401 || response.status === 403 ? 403 : 502,
+      publicMessage,
+      `${internalLabel} failed with HTTP ${response.status}: ${result.message ?? "rejected"}`
+    );
+  }
+
+  const event = JSON.parse(eventBody) as NostrEvent;
+  return {
+    ...result,
+    event_id: result.event_id ?? event.id
+  };
 }
 
 async function lookupDisplayName(

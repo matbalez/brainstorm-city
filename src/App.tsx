@@ -34,6 +34,7 @@ function App() {
   const [isBuilding, setIsBuilding] = useState(false);
   const buildDialogRef = useRef<HTMLDialogElement>(null);
   const nsecInputRef = useRef<HTMLInputElement>(null);
+  const agentPubkeyInputRef = useRef<HTMLInputElement>(null);
 
   const viralityTone = useMemo(() => {
     if (virality < 34) return "Focused";
@@ -118,6 +119,7 @@ function App() {
   function closeBuildDialog() {
     if (isBuilding) return;
     if (nsecInputRef.current) nsecInputRef.current.value = "";
+    if (agentPubkeyInputRef.current) agentPubkeyInputRef.current.value = "";
     setSelectedIdea(null);
     setBuildError("");
     setBuildResult(null);
@@ -132,8 +134,13 @@ function App() {
     setIsBuilding(true);
 
     try {
-      const signed = await signBuildRequest(nsecInputRef.current.value, selectedIdea);
+      const signed = await signBuildRequest(
+        nsecInputRef.current.value,
+        selectedIdea,
+        agentPubkeyInputRef.current?.value
+      );
       nsecInputRef.current.value = "";
+      if (agentPubkeyInputRef.current) agentPubkeyInputRef.current.value = "";
 
       const response = await fetch("/api/build-on-buzz", {
         method: "POST",
@@ -158,6 +165,7 @@ function App() {
       );
     } finally {
       if (nsecInputRef.current) nsecInputRef.current.value = "";
+      if (agentPubkeyInputRef.current) agentPubkeyInputRef.current.value = "";
       setIsBuilding(false);
     }
   }
@@ -296,7 +304,7 @@ function App() {
                       className="build-button"
                       onClick={() => openBuildDialog(idea)}
                     >
-                      <Hammer aria-hidden="true" size={14} />
+                      <span aria-hidden="true">🐝</span>
                       Build it on Buzz
                     </button>
                   </div>
@@ -361,9 +369,23 @@ function App() {
                     required
                   />
                 </label>
+                <label className="field">
+                  <span>Build agent pubkey <small>(optional)</small></span>
+                  <input
+                    ref={agentPubkeyInputRef}
+                    type="text"
+                    name="build-agent-pubkey"
+                    placeholder="npub1... or 64-character hex"
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    disabled={isBuilding}
+                  />
+                </label>
                 <p className="security-note">
                   Your nsec stays in this browser. It signs one short-lived authorization and is
-                  cleared immediately; Brainstorm City never sends or stores the key.
+                  cleared immediately; Brainstorm City never sends or stores the key. If you add an
+                  agent, the browser also signs the agent add and one-shot build command.
                 </p>
               </>
             )}
