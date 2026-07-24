@@ -101,7 +101,8 @@ const buzzBuildConfig: BuzzBuildConfig = {
     (isProduction ? "https://brainstorm-city.fly.dev" : `http://localhost:${port}`),
   relayHttpUrl: normalizeRelayHttpUrl(
     process.env.BUZZ_RELAY_URL ?? "https://flint.communities.buzz.xyz"
-  )
+  ),
+  generalChannelId: clean(process.env.BUZZ_GENERAL_CHANNEL_ID)
 };
 const buildAuthorizationReplayGuard = new AuthorizationReplayGuard();
 const buildRateLimiter = new BuildRateLimiter();
@@ -225,7 +226,9 @@ async function handleBuildOnBuzz(req: IncomingMessage, res: ServerResponse) {
     sendJson(res, 201, {
       channelId: result.channelId,
       channelName: result.channelName,
-      messageEventId: result.messageEventId
+      messageEventId: result.messageEventId,
+      agentMessageEventId: result.agentMessageEventId,
+      announcementEventId: result.announcementEventId
     });
   } catch (caught) {
     if (caught instanceof BuildOnBuzzError) {

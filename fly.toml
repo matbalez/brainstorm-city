@@ -11,6 +11,7 @@ primary_region = "sjc"
   PUBLIC_ORIGIN = "https://brainstorm-city.fly.dev"
   BUZZ_RELAY_URL = "https://flint.communities.buzz.xyz"
   BUZZ_CHANNEL_CREATOR_PUBKEY = "5630c46628625e3d69756723ca537f20e3a5a035266015b079f406d21df7e44e"
+  BUZZ_GENERAL_CHANNEL_ID = "0683e2de-c0c9-496d-bb1f-46d679e3bf38"
 
 [http_service]
   internal_port = 8080
